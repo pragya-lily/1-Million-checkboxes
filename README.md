@@ -11,6 +11,14 @@ A real-time collaborative web app where **1,000,000 checkboxes** are shared acro
 
 ---
 
+##  video / Demo
+
+---
+
+https://github.com/user-attachments/assets/c33c95a3-4922-4a4a-ac18-190773a68d6e
+
+---
+
 ##  Tech Stack
 
 | Layer | Technology |
