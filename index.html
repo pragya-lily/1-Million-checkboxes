@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Million Checkboxes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">☑ MILLION CHECKBOXES</div>
+      <div class="header-stats">
+        <span class="stat" id="stat-checked">
+          <span class="stat-value" id="checked-count">—</span>
+          <span class="stat-label">checked</span>
+        </span>
+        <span class="stat-divider">·</span>
+        <span class="stat" id="stat-users">
+          <span class="stat-value" id="user-count">—</span>
+          <span class="stat-label">online</span>
+        </span>
+        <span class="stat-divider">·</span>
+        <span class="stat">
+          <span class="stat-value" id="total-count">1,000,000</span>
+          <span class="stat-label">total</span>
+        </span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="ws-status" class="ws-badge ws-connecting">
+        <span class="ws-dot"></span>
+        <span class="ws-label">Connecting…</span>
+      </div>
+      <div id="auth-section" class="auth-section">
+        <!-- Filled by JS -->
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Loading overlay ────────────────────────────────────────────────── -->
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loading-content">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Loading 1,000,000 checkboxes…</div>
+      <div class="loading-sub" id="loading-detail">Fetching state from server</div>
+    </div>
+  </div>
+
+  <!-- ── Auth banner (for anonymous users) ────────────────────────────────── -->
+  <div id="auth-banner" class="auth-banner" style="display:none">
+    <span>👀 You're browsing as a guest — <strong>sign in</strong> to toggle checkboxes.</span>
+    <a href="/auth/login" class="banner-btn">Sign In</a>
+  </div>
+
+  <!-- ── Main grid area ─────────────────────────────────────────────────── -->
+  <div id="grid-container" class="grid-container">
+    <!-- Scrollable content with full virtual height -->
+    <div id="grid-content" class="grid-content">
+      <!-- Rows rendered here by virtual scroll engine -->
+    </div>
+  </div>
+
+  <!-- ── Footer / status bar ──────────────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="footer-left">
+      <span id="viewport-info" class="footer-info">Rows 0–0 visible</span>
+    </div>
+    <div class="footer-right">
+      <span class="footer-info">
+        <span id="last-update" class="footer-update"></span>
+      </span>
+      <button id="reset-btn" class="footer-btn" onclick="resetAll()" style="display:none">↺ Reset All</button>
+    </div>
+  </footer>
+
+  <!-- ── Toast container ──────────────────────────────────────────────────── -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
