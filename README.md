@@ -1,5 +1,4 @@
-[README.md](https://github.com/user-attachments/files/27317705/README.md)
-# ☑ Million Checkboxes
+# 1 Million Checkboxes
 
 A real-time collaborative web app where **1,000,000 checkboxes** are shared across all connected users. Toggle any checkbox and every other user sees the change instantly — powered by WebSockets, Redis Pub/Sub, and OAuth 2.0 / OIDC authentication.
 
@@ -7,7 +6,6 @@ A real-time collaborative web app where **1,000,000 checkboxes** are shared acro
 
 ##  Screenshots / Demo
 
-> Open two browser windows side-by-side and toggle checkboxes — watch them update in real time.
 
 ---
 
