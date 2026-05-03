@@ -1,442 +1,306 @@
-/**
- * public/app.js
- *
- * Client-side logic for Million Checkboxes.
- *
- * ── Key Concepts ─────────────────────────────────────────────────────────
- *
- * 1. STATE BUFFER
- *    All 1,000,000 checkbox states are stored in a Uint8Array(125_000).
- *    1 bit per checkbox. getBit/setBit use Redis-compatible big-endian ordering.
- *
- * 2. VIRTUAL SCROLLING
- *    Rendering 1M DOM nodes is impossible. We only render rows that are
- *    currently visible in the viewport + a small buffer above/below.
- *    Rows are absolutely positioned inside a full-height container.
- *    On scroll, old rows outside the visible range are removed and new
- *    rows entering the range are created.
- *
- * 3. WEBSOCKET
- *    Toggles are sent as { type:"toggle", index:N }.
- *    Updates arrive as { type:"update", index:N, state:0|1, updatedBy:"…" }.
- *    We apply optimistic updates immediately (feels instant), then reconcile
- *    when the server broadcasts the ground-truth state.
- *
- * 4. RECONNECTION
- *    Exponential back-off reconnects the WebSocket if the connection drops.
- *    On reconnect, the full state is re-fetched so nothing is missed.
- */
+[README.md](https://github.com/user-attachments/files/27317705/README.md)
+# ☑ Million Checkboxes
 
-"use strict";
+A real-time collaborative web app where **1,000,000 checkboxes** are shared across all connected users. Toggle any checkbox and every other user sees the change instantly — powered by WebSockets, Redis Pub/Sub, and OAuth 2.0 / OIDC authentication.
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-const TOTAL      = 1_000_000;
-const CELL_SIZE  = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell-size')) || 16;
-const CELL_GAP   = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell-gap'))  || 2;
-const CELL_STEP  = CELL_SIZE + CELL_GAP;   // px per cell including gap
-const ROW_H      = CELL_STEP;              // row height in px
-const BUFFER     = 8;                      // extra rows to render above/below viewport
+---
 
-// ─── DOM refs ─────────────────────────────────────────────────────────────────
-const gridContainer  = document.getElementById('grid-container');
-const gridContent    = document.getElementById('grid-content');
-const loadingOverlay = document.getElementById('loading-overlay');
-const loadingDetail  = document.getElementById('loading-detail');
-const authBanner     = document.getElementById('auth-banner');
-const authSection    = document.getElementById('auth-section');
-const wsStatusEl     = document.getElementById('ws-status');
-const checkedCountEl = document.getElementById('checked-count');
-const userCountEl    = document.getElementById('user-count');
-const viewportInfo   = document.getElementById('viewport-info');
-const lastUpdateEl   = document.getElementById('last-update');
-const toastContainer = document.getElementById('toast-container');
-const resetBtn       = document.getElementById('reset-btn');
+##  Screenshots / Demo
 
-// ─── State ────────────────────────────────────────────────────────────────────
-let checkboxState  = new Uint8Array(Math.ceil(TOTAL / 8)); // 125_000 bytes
-let COLS           = 100;   // computed from viewport width
-let ROWS           = Math.ceil(TOTAL / COLS);
-let currentUser    = null;  // { sub, name, email, avatar } or null
-let checkedCount   = 0;     // running total of checked boxes
-let ws             = null;
-let wsReconnectMs  = 500;
-let wsReconnectTimer = null;
+> Open two browser windows side-by-side and toggle checkboxes — watch them update in real time.
 
-// ─── Bit helpers (big-endian, Redis-compatible) ───────────────────────────────
-function getBit(index) {
-  return (checkboxState[index >> 3] >> (7 - (index & 7))) & 1;
-}
+---
 
-function setBit(index, value) {
-  const byteIdx = index >> 3;
-  const bitIdx  = 7 - (index & 7);
-  if (value) {
-    checkboxState[byteIdx] |=  (1 << bitIdx);
-  } else {
-    checkboxState[byteIdx] &= ~(1 << bitIdx);
-  }
-}
+##  Tech Stack
 
-// ─── Grid layout ─────────────────────────────────────────────────────────────
-function computeLayout() {
-  const containerWidth = gridContainer.clientWidth;
-  // How many full cells fit in the container width?
-  COLS = Math.max(10, Math.floor((containerWidth - CELL_GAP) / CELL_STEP));
-  ROWS = Math.ceil(TOTAL / COLS);
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Vanilla HTML, CSS, JavaScript (Virtual Scroll) |
+| Backend | Node.js + Express |
+| Real-time | WebSockets (`ws` library) |
+| State Store | Redis (BITFIELD — 1M bits = 125 KB) |
+| Pub/Sub | Redis Pub/Sub (multi-server broadcast) |
+| Auth | OIDC / OAuth 2.0 — Authorization Code Flow |
+| Rate Limiting | Custom Redis-based fixed-window counter |
 
-  // Set total virtual height so the scrollbar is accurate
-  gridContent.style.width  = `${COLS * CELL_STEP + CELL_GAP}px`;
-  gridContent.style.height = `${ROWS * ROW_H + CELL_GAP}px`;
-}
+---
 
-// ─── Virtual scroll state ─────────────────────────────────────────────────────
-const renderedRows = new Map(); // rowIndex → <div class="grid-row">
+##  Features
 
-function getVisibleRange() {
-  const scrollTop   = gridContainer.scrollTop;
-  const viewHeight  = gridContainer.clientHeight;
-  const firstRow = Math.max(0,        Math.floor(scrollTop / ROW_H) - BUFFER);
-  const lastRow  = Math.min(ROWS - 1, Math.ceil((scrollTop + viewHeight) / ROW_H) + BUFFER);
-  return { firstRow, lastRow };
-}
+- **1,000,000 checkboxes** — stored compactly as a Redis bitfield (125 KB total)
+- **Real-time sync** — WebSocket updates broadcast to all connected clients
+- **Virtual scrolling** — only renders visible rows, handles 1M checkboxes smoothly
+- **OIDC / OAuth 2.0** — full Authorization Code Flow with a local mock auth server
+- **Custom rate limiting** — no external packages; Redis-based fixed-window counters
+- **Redis Pub/Sub** — broadcasts updates across multiple server instances (horizontal scale)
+- **Anonymous read access** — guests can view but not toggle
+- **Optimistic UI updates** — checkbox toggles feel instant; server state reconciles
+- **Auto-reconnect** — WebSocket reconnects with exponential back-off
+- **Live stats** — connected users, checked count updated in real time
 
-function renderRow(rowIndex) {
-  const row = document.createElement('div');
-  row.className = 'grid-row';
-  row.style.top = `${rowIndex * ROW_H + CELL_GAP}px`;
+---
 
-  const startIndex = rowIndex * COLS;
-  const endIndex   = Math.min(startIndex + COLS, TOTAL);
+##  Project Structure
 
-  for (let i = startIndex; i < endIndex; i++) {
-    const cell = document.createElement('div');
-    cell.className = 'cb-cell' + (getBit(i) ? ' checked' : '');
-    cell.dataset.i = i;
-    row.appendChild(cell);
-  }
+```
+million-checkboxes/
+├── auth-server/
+│   └── index.js          # Mock OIDC / OAuth 2.0 provider (port 3001)
+├── server/
+│   ├── index.js          # Express app + HTTP server entry point
+│   ├── redis.js          # Redis client singleton (main + subscriber)
+│   ├── rateLimiter.js    # Custom rate limiting (no external packages)
+│   ├── websocket.js      # WebSocket server + Redis Pub/Sub handler
+│   ├── middleware/
+│   │   └── auth.js       # JWT session middleware
+│   └── routes/
+│       ├── auth.js       # OAuth 2.0 routes (login, callback, logout, me)
+│       └── checkboxes.js # REST checkbox routes (state, stats, reset)
+├── public/
+│   ├── index.html        # Single-page app shell
+│   ├── style.css         # Dark terminal aesthetic
+│   └── app.js            # Virtual scroll + WebSocket client
+├── package.json
+├── .env.example
+└── README.md
+```
 
-  gridContent.appendChild(row);
-  renderedRows.set(rowIndex, row);
-}
+---
 
-function removeRow(rowIndex) {
-  const row = renderedRows.get(rowIndex);
-  if (row) {
-    row.remove();
-    renderedRows.delete(rowIndex);
-  }
-}
+##  How to Run Locally
 
-function updateVirtualScroll() {
-  const { firstRow, lastRow } = getVisibleRange();
+### Prerequisites
 
-  // Remove rows that scrolled out of range
-  for (const [ri] of renderedRows) {
-    if (ri < firstRow || ri > lastRow) removeRow(ri);
-  }
+- Node.js 18+
+- Redis 6+ running locally (`redis-server`)
 
-  // Render newly visible rows
-  for (let r = firstRow; r <= lastRow; r++) {
-    if (!renderedRows.has(r)) renderRow(r);
-  }
+### Steps
 
-  // Update footer info
-  viewportInfo.textContent = `Rows ${firstRow + 1}–${lastRow + 1} / ${ROWS.toLocaleString()}`;
-}
+```bash
+# 1. Clone the repo
+git clone <your-repo-url>
+cd million-checkboxes
 
-// ─── Click handler (event delegation on grid content) ────────────────────────
-gridContent.addEventListener('click', (e) => {
-  const cell = e.target.closest('.cb-cell');
-  if (!cell) return;
+# 2. Install dependencies
+npm install
 
-  if (!currentUser) {
-    showToast('Sign in to toggle checkboxes.', 'error');
-    return;
-  }
+# 3. Configure environment
+cp .env.example .env
+# Edit .env if needed (defaults work for local dev)
 
-  const index = parseInt(cell.dataset.i);
-  if (isNaN(index)) return;
+# 4. Start both servers concurrently
+npm run dev:simple
 
-  // Optimistic update: flip locally immediately
-  const newState = getBit(index) ? 0 : 1;
-  setBit(index, newState);
-  cell.classList.toggle('checked', newState === 1);
-  updateCheckedCount(newState === 1 ? 1 : -1);
+# OR start them separately in two terminals:
+# Terminal 1:
+npm run start:auth    # Auth server → http://localhost:3001
+# Terminal 2:
+npm start             # Main app   → http://localhost:3000
+```
 
-  // Send to server via WebSocket
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'toggle', index }));
-  } else {
-    // Revert optimistic update if not connected
-    setBit(index, newState ? 0 : 1);
-    cell.classList.toggle('checked', !newState);
-    updateCheckedCount(newState === 1 ? -1 : 1);
-    showToast('Not connected — please wait for reconnect.', 'error');
-  }
-});
+Visit `http://localhost:3000` in your browser.
 
-// ─── Apply a server-authoritative update to a single checkbox ────────────────
-function applyUpdate(index, state, updatedBy) {
-  const oldState = getBit(index);
-  if (oldState === state) return; // already correct (from optimistic update)
+---
 
-  setBit(index, state);
-  updateCheckedCount(state === 1 ? 1 : -1);
+##  Environment Variables
 
-  // Update DOM if the cell is currently rendered
-  const rowIndex = Math.floor(index / COLS);
-  const colIndex = index % COLS;
-  const row = renderedRows.get(rowIndex);
-  if (row) {
-    const cell = row.children[colIndex];
-    if (cell) {
-      cell.classList.toggle('checked', state === 1);
-      // Briefly highlight the changed cell
-      cell.style.outline = `2px solid var(--accent-2)`;
-      setTimeout(() => { cell.style.outline = ''; }, 400);
-    }
-  }
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | Main app port |
+| `AUTH_PORT` | `3001` | Auth server port |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+| `OIDC_ISSUER` | `http://localhost:3001` | URL of the auth server |
+| `CLIENT_ID` | `million-checkboxes-client` | OAuth client ID |
+| `CLIENT_SECRET` | *(see .env.example)* | OAuth client secret |
+| `REDIRECT_URI` | `http://localhost:3000/auth/callback` | OAuth callback URL |
+| `OIDC_SECRET` | *(see .env.example)* | Secret to sign OIDC tokens |
+| `JWT_SECRET` | *(see .env.example)* | Secret to sign session tokens |
+| `TOTAL_CHECKBOXES` | `1000000` | Number of checkboxes |
 
-  if (updatedBy && updatedBy !== currentUser?.name) {
-    lastUpdateEl.textContent = `#${index.toLocaleString()} ${state ? '✔' : '✕'} by ${updatedBy}`;
-  }
-}
+---
 
-// ─── Checked count helper ─────────────────────────────────────────────────────
-function updateCheckedCount(delta) {
-  checkedCount = Math.max(0, Math.min(TOTAL, checkedCount + delta));
-  checkedCountEl.textContent = checkedCount.toLocaleString();
-}
+##  Redis Setup
 
-function recomputeCheckedCount() {
-  let count = 0;
-  for (let i = 0; i < checkboxState.length; i++) {
-    let b = checkboxState[i];
-    while (b) { count += b & 1; b >>= 1; }
-  }
-  checkedCount = count;
-  checkedCountEl.textContent = count.toLocaleString();
-}
+```bash
+# macOS (Homebrew)
+brew install redis
+brew services start redis
 
-// ─── Load full checkbox state from server ─────────────────────────────────────
-async function loadState() {
-  loadingDetail.textContent = 'Fetching checkbox state…';
-  try {
-    const res  = await fetch('/api/checkboxes/state');
-    const json = await res.json();
+# Ubuntu / Debian
+sudo apt install redis-server
+sudo systemctl start redis
 
-    // Decode base64 → Uint8Array
-    const b64    = json.data;
-    const binary = atob(b64);
-    const bytes  = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+# Docker
+docker run -d -p 6379:6379 redis:alpine
 
-    checkboxState = bytes;
-    loadingDetail.textContent = 'Counting checked boxes…';
-    recomputeCheckedCount();
-    return true;
-  } catch (err) {
-    console.error('[State] Load failed:', err);
-    loadingDetail.textContent = 'Failed to load — using empty state.';
-    return false;
-  }
-}
+# Verify
+redis-cli ping   # → PONG
+```
 
-// ─── WebSocket ────────────────────────────────────────────────────────────────
-function connectWebSocket() {
-  if (ws && ws.readyState !== WebSocket.CLOSED) return;
+### How checkbox state is stored in Redis
 
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url      = `${protocol}//${location.host}/ws`;
+```
+Key: "checkboxes"  (Redis String / Bitfield)
 
-  setWsStatus('connecting');
-  ws = new WebSocket(url);
+SETBIT checkboxes 0 1        # Check checkbox 0
+GETBIT checkboxes 0          # Read checkbox 0
+BITFIELD checkboxes INCRBY u1 42 1   # Atomically toggle checkbox 42
+BITCOUNT checkboxes          # Count all checked boxes
+GET checkboxes               # Get all 125,000 bytes at once
+```
 
-  ws.addEventListener('open', () => {
-    setWsStatus('connected');
-    wsReconnectMs = 500; // reset back-off
-    console.log('[WS] Connected');
-  });
+1,000,000 bits = **125,000 bytes = 125 KB** — stored in a single Redis key.
 
-  ws.addEventListener('message', (e) => {
-    let msg;
-    try { msg = JSON.parse(e.data); } catch { return; }
+---
 
-    switch (msg.type) {
-      case 'update':
-        applyUpdate(msg.index, msg.state, msg.updatedBy);
-        break;
+##  Auth Flow Explanation
 
-      case 'stats':
-        userCountEl.textContent = msg.connectedUsers.toLocaleString();
-        break;
+This app implements **OAuth 2.0 Authorization Code Flow** with a local mock **OIDC provider**.
 
-      case 'error':
-        console.warn('[WS] Server error:', msg.message);
-        if (msg.code === 'AUTH_REQUIRED') {
-          showToast('Sign in to toggle checkboxes.', 'error');
-        } else if (msg.code === 'RATE_LIMITED') {
-          showToast(`Slow down! Max toggles reached.`, 'error');
-        } else {
-          showToast(msg.message, 'error');
-        }
-        break;
+```
+Browser                   Main App (3000)           Auth Server (3001)
+  |                             |                           |
+  |  GET /                      |                           |
+  |─────────────────────────────>                           |
+  |  (no session cookie)        |                           |
+  |  render page w/ Sign In btn |                           |
+  <─────────────────────────────|                           |
+  |                             |                           |
+  |  Click "Sign In"            |                           |
+  |  GET /auth/login            |                           |
+  |─────────────────────────────>                           |
+  |  302 → /authorize?...state  |                           |
+  <─────────────────────────────|                           |
+  |                                                         |
+  |  GET /authorize?client_id=...&state=...                 |
+  |─────────────────────────────────────────────────────────>
+  |  Show login form                                        |
+  <─────────────────────────────────────────────────────────|
+  |                                                         |
+  |  POST /authorize (username/password)                    |
+  |─────────────────────────────────────────────────────────>
+  |  302 → /auth/callback?code=ABC&state=XYZ                |
+  <─────────────────────────────────────────────────────────|
+  |                             |                           |
+  |  GET /auth/callback?code=ABC|                           |
+  |─────────────────────────────>                           |
+  |                             |  POST /token (code=ABC)   |
+  |                             |─────────────────────────→|
+  |                             |  { access_token, id_token}|
+  |                             |←─────────────────────────|
+  |                             |                           |
+  |                             |  Verify id_token         |
+  |                             |  Create session JWT      |
+  |                             |  Set httpOnly cookie     |
+  |  302 → /  (with cookie)     |                           |
+  <─────────────────────────────|                           |
+  |                             |                           |
+  |  GET /  (with session cookie)|                          |
+  |─────────────────────────────>                           |
+  |  Serve app (logged in)      |                           |
+  <─────────────────────────────|                           |
+```
 
-      case 'pong':
-        break; // heartbeat response
+**Security highlights:**
+- `state` parameter prevents CSRF attacks
+- Session token stored in `httpOnly` cookie (not accessible from JS)
+- Auth codes are one-time use and expire in 5 minutes
 
-      default:
-        console.log('[WS] Unknown message:', msg);
-    }
-  });
+**Demo users:** `alice / password123`, `bob / password123`, `charlie / password123`
 
-  ws.addEventListener('close', () => {
-    setWsStatus('disconnected');
-    console.warn(`[WS] Disconnected. Reconnecting in ${wsReconnectMs}ms…`);
-    wsReconnectTimer = setTimeout(() => {
-      wsReconnectMs = Math.min(wsReconnectMs * 2, 30_000); // cap at 30s
-      connectWebSocket();
-    }, wsReconnectMs);
-  });
+---
 
-  ws.addEventListener('error', (err) => {
-    console.error('[WS] Error:', err);
-  });
-}
+## 🔌 WebSocket Flow Explanation
 
-function setWsStatus(status) {
-  wsStatusEl.className = `ws-badge ws-${status}`;
-  const label = wsStatusEl.querySelector('.ws-label');
-  label.textContent = { connecting: 'Connecting…', connected: 'Live', disconnected: 'Offline' }[status];
-}
+```
+Client                    Server                    Redis
+  |                          |                        |
+  |  WS Upgrade /ws          |                        |
+  |──────────────────────────>                        |
+  |  Verify session cookie   |                        |
+  |  Add to connectedClients |                        |
+  |  INCR connected_users    |──────────────────────>|
+  |  Broadcast stats update  |                        |
+  <──────────────────────────|                        |
+  |                          |                        |
+  |  { type:"toggle", index:N }                       |
+  |──────────────────────────>                        |
+  |  1. Rate-limit check     |──────────────────────>|
+  |  2. Atomic toggle        |  BITFIELD INCRBY u1 N 1
+  |                          |──────────────────────>|
+  |  3. Publish update       |  PUBLISH checkbox-updates {...}
+  |                          |──────────────────────>|
+  |                          |                        |
+  |  All servers receive the publish via SUB:         |
+  |  { type:"update", index:N, state:1, updatedBy }   |
+  |  Broadcast to all connected clients               |
+  <──────────────────────────|                        |
+```
 
-// ─── Auth UI ──────────────────────────────────────────────────────────────────
-async function loadUser() {
-  try {
-    const res = await fetch('/auth/me', { credentials: 'include' });
-    if (res.ok) {
-      currentUser = await res.json();
-      renderAuthUI(currentUser);
-    } else {
-      currentUser = null;
-      renderAuthUI(null);
-    }
-  } catch {
-    currentUser = null;
-    renderAuthUI(null);
-  }
-}
+---
 
-function renderAuthUI(user) {
-  if (user) {
-    authSection.innerHTML = `
-      <div class="user-chip">
-        <div class="user-avatar">${user.avatar || user.name[0].toUpperCase()}</div>
-        <span class="user-name">${user.name}</span>
-      </div>
-      <a href="/auth/logout" class="btn-logout">Sign Out</a>
-    `;
-    gridContainer.classList.remove('readonly');
-    authBanner.style.display = 'none';
-    resetBtn.style.display = 'block';
-  } else {
-    authSection.innerHTML = `<a href="/auth/login" class="btn-login">Sign In</a>`;
-    gridContainer.classList.add('readonly');
-    authBanner.style.display = 'flex';
-    gridContainer.classList.add('has-banner');
-    resetBtn.style.display = 'none';
-  }
-}
+##  Rate Limiting Logic
 
-// ─── Reset handler ────────────────────────────────────────────────────────────
-async function resetAll() {
-  if (!currentUser) return;
-  if (!confirm('Reset ALL 1,000,000 checkboxes to unchecked?')) return;
-  try {
-    const res = await fetch('/api/checkboxes/reset', {
-      method: 'POST',
-      credentials: 'include',
-    });
-    if (res.ok) {
-      checkboxState.fill(0);
-      checkedCount = 0;
-      checkedCountEl.textContent = '0';
-      // Re-render all visible rows
-      for (const [ri] of [...renderedRows]) {
-        removeRow(ri);
-      }
-      updateVirtualScroll();
-      showToast('All checkboxes reset!', 'success');
-    }
-  } catch (err) {
-    showToast('Reset failed.', 'error');
-  }
-}
+Rate limiting is implemented **from scratch** using Redis — no external packages.
 
-// ─── Toast notifications ──────────────────────────────────────────────────────
-function showToast(message, type = '') {
-  const toast = document.createElement('div');
-  toast.className = `toast ${type ? 'toast-' + type : ''}`;
-  toast.textContent = message;
-  toastContainer.appendChild(toast);
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    toast.style.transition = 'opacity 0.3s';
-    setTimeout(() => toast.remove(), 300);
-  }, 3000);
-}
+### Strategy: Fixed-Window Counter
 
-// ─── Handle window resize ─────────────────────────────────────────────────────
-let resizeTimer;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    // Clear all rendered rows and recompute layout
-    for (const [ri] of [...renderedRows]) removeRow(ri);
-    computeLayout();
-    updateVirtualScroll();
-  }, 200);
-});
+```
+Key format: rl:{type}:{identifier}:{windowIndex}
 
-// ─── Scroll handler (throttled) ───────────────────────────────────────────────
-let scrollRaf = null;
-gridContainer.addEventListener('scroll', () => {
-  if (scrollRaf) return;
-  scrollRaf = requestAnimationFrame(() => {
-    updateVirtualScroll();
-    scrollRaf = null;
-  });
-});
+windowIndex = Math.floor(Date.now() / windowMs)
+```
 
-// ─── Boot sequence ────────────────────────────────────────────────────────────
-async function boot() {
-  // 1. Load current user
-  await loadUser();
+For every request:
+1. `INCR rl:{type}:{id}:{window}` — atomic increment
+2. On first increment, `PEXPIRE` sets the key to auto-delete after `2 × windowMs`
+3. If `count > limit` → reject with 429
 
-  // 2. Compute grid layout based on viewport
-  computeLayout();
+### Configured Limits
 
-  // 3. Fetch full checkbox state
-  await loadState();
+| Type | Limit | Window | Keyed by |
+|------|-------|--------|----------|
+| `http_api` | 120 req | 60 s | IP or userId |
+| `ws_toggle` | 15 toggles | 1 s | userId or IP |
+| `ws_connect` | 10 connects | 60 s | IP |
 
-  // 4. Connect WebSocket
-  connectWebSocket();
+### Why Redis?
+- `INCR` is **atomic** — no race conditions even across multiple server instances
+- Keys **auto-expire** — no cleanup needed, no memory leak
+- Works **across all server instances** (unlike in-memory Maps)
 
-  // 5. Render initial visible rows
-  updateVirtualScroll();
+---
 
-  // 6. Hide loading overlay
-  loadingOverlay.classList.add('hidden');
-  setTimeout(() => { loadingOverlay.style.display = 'none'; }, 500);
+##  Design Decisions
 
-  // 7. Periodic stats refresh (backup in case WS stats message missed)
-  setInterval(async () => {
-    try {
-      const res = await fetch('/api/checkboxes/stats');
-      const j   = await res.json();
-      if (j.connectedUsers !== undefined) userCountEl.textContent = j.connectedUsers.toLocaleString();
-    } catch { /* ignore */ }
-  }, 10_000);
-}
+### How are 1M states stored?
 
-boot();
+As a **Redis bitfield** — 1 bit per checkbox, 1M bits = 125 KB in a single key.
+This is ~8000× more compact than storing one Redis key per checkbox.
+
+### How does toggling work without race conditions?
+
+`BITFIELD checkboxes INCRBY u1 #N 1` is **atomic**. A 1-bit unsigned field wraps 0→1→0, which is a perfect toggle. No read-modify-write race.
+
+### How do multiple servers stay in sync?
+
+Redis **Pub/Sub**: when any server processes a toggle, it publishes `{index, state}` to the `checkbox-updates` channel. Every server instance subscribes to this channel and broadcasts to its own connected clients.
+
+### How is the grid rendered without crashing the browser?
+
+**Virtual scrolling**: only rows currently visible in the viewport (± 8 buffer rows) are in the DOM. A scroll event listener re-renders as the user scrolls. Total DOM nodes at any time: ~(viewportRows + 16) × COLS.
+
+---
+
+##  API Reference
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| `GET` | `/api/checkboxes/state` | Optional | Full bitfield as base64 |
+| `GET` | `/api/checkboxes/stats` | Optional | Checked count, online users |
+| `POST` | `/api/checkboxes/reset` | Required | Reset all to unchecked |
+| `GET` | `/auth/login` | — | Start OAuth flow |
+| `GET` | `/auth/callback` | — | OAuth callback handler |
+| `GET` | `/auth/logout` | — | Clear session |
+| `GET` | `/auth/me` | Required | Current user info |
+| `WS` | `/ws` | Cookie | WebSocket endpoint |
