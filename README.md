@@ -6,6 +6,8 @@ A real-time collaborative web app where **1,000,000 checkboxes** are shared acro
 
 ##  Screenshots / Demo
 
+<img width="1893" height="908" alt="image" src="https://github.com/user-attachments/assets/78b6a490-b963-45f9-a227-fcb33105cf3e" />
+
 
 ---
 
