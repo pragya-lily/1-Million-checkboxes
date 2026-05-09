@@ -75,40 +75,6 @@ million-checkboxes/
 
 ---
 
-##  How to Run Locally
-
-### Prerequisites
-
-- Node.js 18+
-- Redis 6+ running locally (`redis-server`)
-
-### Steps
-
-```bash
-# 1. Clone the repo
-git clone <your-repo-url>
-cd million-checkboxes
-
-# 2. Install dependencies
-npm install
-
-# 3. Configure environment
-cp .env.example .env
-# Edit .env if needed (defaults work for local dev)
-
-# 4. Start both servers concurrently
-npm run dev:simple
-
-# OR start them separately in two terminals:
-# Terminal 1:
-npm run start:auth    # Auth server → http://localhost:3001
-# Terminal 2:
-npm start             # Main app   → http://localhost:3000
-```
-
-Visit `http://localhost:3000` in your browser.
-
----
 
 ##  Environment Variables
 
@@ -218,7 +184,7 @@ Browser                   Main App (3000)           Auth Server (3001)
 
 ---
 
-## 🔌 WebSocket Flow Explanation
+##  WebSocket Flow Explanation
 
 ```
 Client                    Server                    Redis
